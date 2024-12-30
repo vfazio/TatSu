@@ -6,6 +6,7 @@ import re
 from collections.abc import Callable, MutableMapping
 from itertools import starmap
 from typing import Any, NamedTuple
+import warnings
 
 from .ast import AST
 from .tokenizing import Tokenizer
@@ -113,7 +114,7 @@ class ParserConfig:
     # they are values returned by `vars` and `dataclass.asdict` so they
     # must be filtered out.
     # If the `ParserConfig` dataclass drops these fields, then this filter can be removed
-    def _filter_non_init_fields(self, settings: MutableMapping[str, Any]) -> MutableMapping[str, Any]:
+    def _filter_non_init_fields(self, **settings: Any) -> MutableMapping[str, Any]:
         for field in [
             field.name for field in dataclasses.fields(self) if not field.init
         ]:
@@ -121,8 +122,25 @@ class ParserConfig:
                 del settings[field]
         return settings
 
+    def _sanitize_deprecated_options(self, **settings: Any) -> dict[str, Any]:
+        for option in (("comments_re", "comments"), ("eol_comments_re", "eol_comments")):
+            if not option[0] in settings:
+                continue
+            deprecated_option = settings[option[0]]
+            del settings[option[0]]
+            if deprecated_option is not None:
+                warnings.warn(f"{option[0]} is deprecated in favor of {option[1]}", DeprecationWarning, 4)
+                if option[1] in settings:
+                    raise ValueError(f"Cannot specify {option[0]} and {option[1]} simultaneously")
+                if isinstance(deprecated_option, re.Pattern):
+                     settings[option[1]] = deprecated_option.pattern
+                else:
+                    settings[option[1]] = deprecated_option
+        return settings
+
     def replace(self, **settings: Any) -> ParserConfig:
-        overrides = self._filter_non_init_fields(self._find_common(**settings))
+        overrides = self._find_common(**self._sanitize_deprecated_options(**settings))
+        overrides = self._filter_non_init_fields(**overrides)
         result = dataclasses.replace(self, **overrides)
         if 'grammar' in overrides:
             result.name = result.grammar
